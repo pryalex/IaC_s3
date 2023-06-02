@@ -1,0 +1,140 @@
+Parameters:
+  s3bucket:
+    Type: String
+    Default: generatednameforbucketwithnumbers
+    Description: ID of the EBS volume to take snapshot from
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref s3bucket
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: my-lambda-function
+      Runtime: python3.8
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          bucket_name: !Ref s3bucket
+      Code:
+        ZipFile: |
+            import boto3
+            import os
+            import json
+            
+            def lambda_handler(event, context):
+                # Retrieve the bucket name from environment variables
+                bucket_name = os.environ['bucket_name']
+                s3_client = boto3.client('s3')
+                
+                # List objects in the bucket
+                response = s3_client.list_objects_v2(Bucket=bucket_name)
+                objects = response['Contents']
+                
+                # Exclude the "generated-url.json" file from the list
+                objects = [obj for obj in objects if obj['Key'] != 'generated-url.json']
+                
+                if objects:
+                    # Get the latest file based on LastModified timestamp
+                    latest_file = sorted(objects, key=lambda obj: obj['LastModified'], reverse=True)[0]
+                    
+                    # Generate a presigned URL for the latest file
+                    s3_presigned_url = s3_client.generate_presigned_url(
+                        'get_object',
+                        Params={'Bucket': bucket_name, 'Key': latest_file['Key']},
+                        ExpiresIn=900
+                    )
+                    
+                    # Read previous data from the "generated-url.json" file
+                    previous_data = {}
+                    try:
+                        response = s3_client.get_object(Bucket=bucket_name, Key='generated-url.json')
+                        previous_data = json.loads(response['Body'].read().decode('utf-8'))
+                    except:
+                        pass
+                    
+                    # Compare with previous data to check if the filename and content length match
+                    if 'filename' in previous_data and 'content_length' in previous_data:
+                        if (
+                            previous_data['filename'] == latest_file['Key'] and
+                            previous_data['content_length'] == latest_file['Size']
+                        ):
+                            # Use the previous URL if the filename and content length match
+                            return previous_data['url']
+                    
+                    # Create a dictionary with the URL, filename, and content length
+                    data = {
+                        'url': s3_presigned_url,
+                        'filename': latest_file['Key'],
+                        'content_length': latest_file['Size']
+                    }
+                    
+                    # Write the dictionary to the "generated-url.json" file
+                    s3_client.put_object(
+                        Bucket=bucket_name,
+                        Key='generated-url.json',
+                        Body=json.dumps(data).encode('utf-8')
+                    )
+                    
+                    return s3_presigned_url
+                else:
+                    return 'No files found in the S3 bucket.'
+
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: EventBridge rule for triggering Lambda function
+      Name: EventBridgeRule
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+      - Arn: !GetAtt LambdaFunction.Arn
+        Id: "TargetLambdaFunction"
+
+  LambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Principal: "events.amazonaws.com"
+      SourceArn: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/EventBridgeRule"
+
+  LambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: "Allow"
+          Principal:
+            Service: "lambda.amazonaws.com"
+          Action: "sts:AssumeRole"
+      Path: "/"
+
+  LambdaS3Policy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: "LambdaS3Policy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: "Allow"
+          Action:
+            - "logs:CreateLogGroup"
+            - "logs:CreateLogStream"
+            - "logs:PutLogEvents"
+          Resource: "*"
+        - Effect: "Allow"
+          Action:
+            - "s3:*"
+            - "s3-object-lambda:Get*"
+            - "s3-object-lambda:List*"
+          Resource:
+            - !Sub "arn:aws:s3:::${s3bucket}"
+            - !Sub "arn:aws:s3:::${s3bucket}/*"
+      Roles:
+        - !Ref LambdaExecutionRole
