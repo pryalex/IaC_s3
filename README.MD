@@ -12,11 +12,12 @@
 A rough estimate for this task could be around 3-4 hours.
 
 ## How to deploy:
-### For running this Cloudformation Template we need to be sure that we already have configured somewhere AWS-CLI in localhost or another server:
+
+For running this Cloudformation Template by AWS-CLI we need to be sure that we already have configured somewhere AWS-CLI or we can add this now:
 
 ```aws configure --profile testuser```
 
-Where we should add ```aws_access_key_id``` and ```aws_secret_access_key``` and optionally ```default region``` of aws and ``format`` for output (txt or json)
+We should add ```aws_access_key_id``` and ```aws_secret_access_key``` and optionally ```default region``` of aws and ``format`` for output (txt or json) and type ENTER
 
 When everything fine and user has enough permittions we should use this command for running that:
 
